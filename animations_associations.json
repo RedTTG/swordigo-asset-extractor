@@ -1,0 +1,123 @@
+{
+    "bat": {
+        "models": ["bat", "bat_black", "bat_blue", "bat_red"],
+        "animations": [
+            "bat_fly",
+            "bat_attack"
+        ]
+    },
+    "critter_konna": {
+        "models": ["critter_konna_green"],
+        "animations": [
+            "critter_konna_walk"
+        ]
+    },
+    "dragonkin": {
+        "models": ["dragonkin"],
+        "animations": [
+            "dragonkin_cast",
+            "dragonkin_castfinish",
+            "dragonkin_fly",
+            "dragonkin_statue",
+            "dragonkin_swing",
+            "dragonkin_sword_fly"
+        ]
+    },
+    "endboss": {
+        "models": ["endboss"],
+        "animations": [
+            "endboss_air",
+            "endboss_cast_air",
+            "endboss_charge",
+            "endboss_chargeloop",
+            "endboss_jump",
+            "endboss_swing",
+            "endboss_walk"
+        ]
+    },
+    "hiro": {
+        "models": ["hiro", "hiro_magicplated", "hiro_plated"],
+        "animations": [
+            "hiro_cast",
+            "hiro_castfinish",
+            "hiro_die",
+            "hiro_hurt",
+            "hiro_jump",
+            "hiro_jumpland",
+            "hiro_lift",
+            "hiro_lift_drop",
+            "hiro_lift_fall",
+            "hiro_lift_jump",
+            "hiro_lift_stand",
+            "hiro_lift_throw",
+            "hiro_lift_walk",
+            "hiro_push",
+            "hiro_run",
+            "hiro_spinjump",
+            "hiro_stand",
+            "hiro_swing2",
+            "hiro_swing5",
+            "hiro_swingair"
+        ]
+    },
+    "kilpikonna": {
+        "models": ["kilpikonna_red", "kilpikonna_snowy", "kilpikonna_wasteland"],
+        "animations": [
+            "kilpikonna_hide",
+            "kilpikonna_shoot",
+            "kilpikonna_stand",
+            "kilpikonna_unhide"
+        ]
+    },
+    "npc_dwarf": {
+        "models": ["npc_dwarf1"],
+        "animations": [
+            "npc_dwarf_stand"
+        ]
+    },
+    "piikkikonna": {
+        "models": ["piikkikonna_green"],
+        "animations": ["piikkikonna_shoot"]
+    },
+    "varibandit": {
+        "models": ["varibandit_brown", "varibandit_dark"],
+        "animations": [
+            "varibandit_jump",
+            "varibandit_jumpattack",
+            "varibandit_throw"
+        ]
+    },
+    "variknight_shield": {
+        "models": ["variknight_shield"],
+        "animations": [
+            "variknight_shield_attack1",
+            "variknight_shield_attack2",
+            "variknight_shield_florennum",
+            "variknight_shield_walk"
+        ]
+    },
+    "varimage": {
+        "models": ["varimage_red", "varimage_green"],
+        "animations": [
+            "varimage_cast",
+            "varimage_invoke",
+            "varimage_walk"
+        ]
+    },
+    "boss1_woodform": {
+        "models": ["boss1_woodform"],
+        "animations": [
+            "boss1_woodform_walk",
+            "woodform_attack"
+        ]
+    },
+    "boss1_shadowform": {
+        "models": ["boss1_shadowform"],
+        "animations": [
+            "boss1_shadowform_move",
+            "boss1_shadowform_shoot",
+            "boss1_shadowform_spin",
+            "boss1_shadowform_spinstart"
+        ]
+    }
+}
