@@ -3,6 +3,8 @@ import pprint
 import shutil
 from collections import Counter
 from pathlib import Path
+from traceback import print_exc
+
 from slashr import SlashR
 
 from glb_compiler import compile_glb
@@ -108,9 +110,9 @@ def decode_pod_files():
                 raise
 
 def sort_model_animations():
-    items = list(results_pod_decode_dir.rglob("*.json"))
-    model_files = []
-    animation_files = []
+    items = list(results_pod_decode_dir.rglob("*"))
+    model_files = set()
+    animation_files = set()
     animation_associations = {}
     model_animations = {}
     animations_models = {}
@@ -120,11 +122,12 @@ def sort_model_animations():
 
     if path_model_files.exists() and not FULL_EXPORT:
         with open(path_model_files, 'r') as f:
-            model_files = json.load(f)
+            model_files = set(json.load(f))
 
     if path_animation_files.exists() and not FULL_EXPORT:
         with open(path_animation_files, 'r') as f:
-            animation_files = json.load(f)
+            animation_files = set(json.load(f))
+
     if path_animation_associations.exists():
         with open(path_animation_associations, 'r') as f:
             animation_associations = json.load(f)
@@ -138,7 +141,6 @@ def sort_model_animations():
                         if animation not in model_animations[model]:
                             model_animations[model].append(animation)
 
-
     with SlashR(False) as sr:
         for i, file in enumerate(items, 1):
             percent = i / len(items) * 100
@@ -148,14 +150,14 @@ def sort_model_animations():
             with open(file, 'r') as f:
                 obj = json.load(f)
                 if obj.get('num_of_meshes', 0) == 0 and obj.get('num_of_frames', 0) > 0:
-                    animation_files.append(file.stem)
+                    animation_files.add(file.stem)
                 else:
-                    model_files.append(file.stem)
+                    model_files.add(file.stem)
 
         with open(path_model_files, 'w') as f:
-            json.dump(model_files, f)
+            json.dump(list(model_files), f)
         with open(path_animation_files, 'w') as f:
-            json.dump(animation_files, f)
+            json.dump(list(animation_files), f)
 
         for animation in animation_files:
             animation_parent = animation.rsplit('_', 1)[0]
@@ -196,16 +198,32 @@ def copy_textures_to_combined():
                     output_path.unlink()
                 raise
 
+def compile_models():
+    items = list(results_models_dir.glob("*"))
+    with SlashR(False) as sr:
+        for i, model_dir in enumerate(items, 1):
+            percent = i / len(items) * 100
+            sr.print(f"[{percent:.2f}] Compiling model {i} / {len(items)}: {model_dir.name}")
+            model_data = model_dir / 'model.json'
+            glb_path = model_dir / f"{model_dir.name}.glb"
+            try:
+                compile_glb(model_data, glb_path)
+            except KeyboardInterrupt:
+                raise
+            except (ValueError, FileNotFoundError):
+                print_exc()
+
 
 if __name__ == "__main__":
     print("Swordigo Resource Exporter")
     print_file_types()
-    # copy_audio_files()
-    # export_pvr_textures()
-    # copy_textures_to_combined()
-    # copy_pod_files()
+    copy_audio_files()
+    export_pvr_textures()
+    copy_textures_to_combined()
+    copy_pod_files()
     decode_pod_files()
     sort_model_animations()
+    compile_models()
     # TEST = 'bat_fly'
     # output_path = results_pod_decode_dir / TEST
     # output_path.mkdir(exist_ok=True)
