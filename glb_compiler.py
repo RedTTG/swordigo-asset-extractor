@@ -1,12 +1,58 @@
 import array
 import json
+import math
 from functools import partial
 from pathlib import Path
 from typing import List, Tuple, Optional
 
 from pygltflib import Material, PbrMetallicRoughness, TextureInfo, Mesh, Primitive, Accessor, BufferView, GLTF2, Buffer, \
     Node, Scene, Sampler, Image, Texture
+import numpy as np
+from scipy.spatial.transform import Rotation as R
 
+
+def axis_angle_to_quat(axis, angle):
+    axis = np.array(axis, dtype=float)
+    n = np.linalg.norm(axis)
+    if n < 1e-8:
+        return np.array([0, 0, 0, 1])
+    axis /= n
+    half = angle * 0.5
+    s = np.sin(half)
+    return np.array([axis[0]*s, axis[1]*s, axis[2]*s, np.cos(half)])
+
+def safe_quat(q):
+    q = np.array(q, dtype=float)
+    if q.size == 3:  # accidentally truncated quat?
+        return np.array([0,0,0,1])
+    if np.allclose(q, 0):
+        return np.array([0,0,0,1])
+    n = np.linalg.norm(q)
+    return q / n
+
+
+def figure_out_transforms(n, node):
+    pos = np.array(node.get('animation_position', [0, 0, 0])[:3], dtype=float)
+    anim_q = safe_quat(node.get('animation_rotation', [0, 0, 0, 1])[:4])
+
+    if 'unknown_5009' in node:
+        scale = node['unknown_5009'][:3]
+        axis = node['unknown_5009'][3:6]
+        angle = float(node['unknown_5009'][6])
+        bind_q = axis_angle_to_quat(axis, angle)
+    else:
+        scale = [1, 1, 1]
+        bind_q = [0, 0, 0, 1]
+
+    anim_q[2] = -anim_q[2]  # invert Z axis
+    bind_q[2] = -bind_q[2]
+
+    # only combine rotations
+    final_rot = R.from_quat(anim_q) * R.from_quat(bind_q)
+
+    n.translation = pos.tolist()
+    n.rotation = final_rot.as_quat().tolist()
+    n.scale = list(scale)
 
 def create_material(mat_data):
     mat = Material(name=mat_data["name"])
@@ -27,6 +73,7 @@ def create_material(mat_data):
     }
 
     return mat
+
 
 def _pack_textures_into_buffer(config_textures, model_info_path: Path, all_buffer_bytes: bytes, all_buffer_views: list):
     """
@@ -76,17 +123,20 @@ def _pack_textures_into_buffer(config_textures, model_info_path: Path, all_buffe
 
     return images, samplers, textures, all_buffer_bytes, all_buffer_views
 
+
 # Helper to 4-byte align each chunk
 def align4(b: bytes) -> bytes:
     pad = (4 - (len(b) % 4)) % 4
     return b + (b'\x00' * pad)
 
+
 def flip_uvs(uvs: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
     # There is a vertical flip we need to apply
     return [
-        (uv[0], 1-uv[1])
+        (uv[0], 1 - uv[1])
         for uv in uvs
     ]
+
 
 def create_mesh(data: dict, material_index: int):
     indices: Optional[List[int]] = data.get("indices", None)
@@ -227,6 +277,7 @@ def create_mesh(data: dict, material_index: int):
         "accessors": accessors,
     }
 
+
 # Helper alignment function
 def align4_len(n: int) -> int:
     return n + ((4 - (n % 4)) % 4)
@@ -251,6 +302,9 @@ def compile_glb(model_info: Path, glb_path: Path):
         if not vertices:
             continue
         del vertices
+        if 'grove_house1' in str(model_info):
+            print(node.get('name', node_id), node.get('material_index', 0))
+            print(materials)
         mesh_chunks.append(create_mesh(data, node.get('material_index', 0)))
         vertices_count_to_mesh_index[count_vertices] = len(mesh_chunks) - 1
 
@@ -324,37 +378,58 @@ def compile_glb(model_info: Path, glb_path: Path):
     gltf.samplers = samplers
     gltf.textures = textures
 
-    # Build nodes list preserving input order; connect nodes that had data to the meshes we created
-    nodes = []
+    # Build nodes list preserving input order; support parent references.
+    nodes: List[Node] = []
+    nid_to_index = {}  # numeric node id -> index in nodes list
+    node_parent_nid = {}  # numeric node id -> parent numeric id (or -1)
+
     for node_id, node in config['nodes'].items():
+        nid = int(node_id)
         data = node.get('data')
-        if not data:
-            nodes.append(Node(name=node.get('name', node_id)))  # empty node
+        parent_nid = node.get('parent_index', -1)
+        node_parent_nid[nid] = parent_nid
+
+        n = Node(name=node.get('name', node_id))
+
+        if data:
+            count_vertices = len(data.get('vertices', []))
+            mesh_index = vertices_count_to_mesh_index.get(count_vertices)
+            if mesh_index is not None:
+                n.mesh = mesh_index
+
+        # Copy transform fields if present
+        figure_out_transforms(n, node)
+
+        nodes.append(n)
+        nid_to_index[nid] = len(nodes) - 1
+
+    # Second pass: link children into parents using numeric ids
+    for nid, idx in nid_to_index.items():
+        parent_nid = node_parent_nid.get(nid, -1)
+        if parent_nid is None or parent_nid == -1:
             continue
-        count_vertices = len(data.get('vertices', []))
-        mesh_index = vertices_count_to_mesh_index.get(count_vertices)
-        if mesh_index is None:
-            nodes.append(Node(name=node.get('name', node_id)))
-        else:
-            n = Node(mesh=mesh_index, name=node.get('name'))
-            # optional: copy transform fields if present
-            # TODO: Apply translation
-            if 'animation_position' in node:
-                n.translation = node['animation_position'][:3]
-            if 'animation_rotation' in node:
-                n.rotation = node['animation_rotation'][:3]
-            # if 'scale' in node:
-            #     n.scale = node['scale']
-            nodes.append(n)
+        parent_idx = nid_to_index.get(parent_nid)
+        if parent_idx is None:
+            # parent not found in config; treat as root (skip linking)
+            continue
+        parent_node = nodes[parent_idx]
+        if parent_node.children is None:
+            parent_node.children = []
+        parent_node.children.append(idx)
 
     gltf.nodes = nodes
-    # single scene that references all nodes
-    gltf.scenes = [Scene(nodes=list(range(len(nodes))))]
+
+    root_nodes = [
+        idx for nid, idx in nid_to_index.items()
+        if node_parent_nid.get(nid, -1) == -1 or node_parent_nid.get(nid) not in nid_to_index
+    ]
+    gltf.scenes = [Scene(nodes=root_nodes)]
     gltf.scene = 0
+
+
 
     # Attach binary blob and write GLB
     gltf.set_binary_blob(all_buffer_bytes)
     gltf.save_binary(str(glb_path))
 
     # raise StopIteration()
-

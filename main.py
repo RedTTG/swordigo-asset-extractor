@@ -32,7 +32,7 @@ results_animations_dir.mkdir(exist_ok=True)
 results_audio_dir = results_assets_dir / "audio"
 results_audio_dir.mkdir(exist_ok=True)
 
-FULL_EXPORT = False
+FULL_EXPORT = True
 
 
 def print_file_types():
@@ -109,6 +109,7 @@ def decode_pod_files():
                     shutil.rmtree(output_path)
                 raise
 
+
 def sort_model_animations():
     items = list(results_pod_decode_dir.rglob("*"))
     model_files = set()
@@ -145,7 +146,7 @@ def sort_model_animations():
         for i, file in enumerate(items, 1):
             percent = i / len(items) * 100
             sr.print(f"[{percent:.2f}] Reading pod information {i} / {len(items)}: {file.name}")
-            if file.stem in model_files or file in animation_files:
+            if (file.stem in model_files) or (file in animation_files):
                 continue
             with open(file, 'r') as f:
                 obj = json.load(f)
@@ -159,7 +160,10 @@ def sort_model_animations():
         with open(path_animation_files, 'w') as f:
             json.dump(list(animation_files), f)
 
-        for animation in animation_files:
+    with SlashR(False) as sr:
+        for i, animation in enumerate(animation_files, 1):
+            percent = i / len(animation_files) * 100
+            sr.print(f"[{percent:.2f}] Processing animations {i} / {len(animation_files)}: {file.name}")
             animation_parent = animation.rsplit('_', 1)[0]
             animation_models = animations_models.get(animation, [])
             if len(animations_models.get(animation, [])) > 0:
@@ -171,15 +175,21 @@ def sort_model_animations():
                 model_animations_list = model_animations.get(animation_parent, [])
                 if animation not in model_animations:
                     model_animations[animation_parent] = [*model_animations_list, animation]
+            result_path = results_animations_dir / f'{animation}.json'
+            if not result_path.exists() or FULL_EXPORT:
+                shutil.copy(results_pod_decode_dir / f'{animation}.json', result_path)
 
-            shutil.copy(results_pod_decode_dir / f'{animation}.json', results_animations_dir / f'{animation}.json')
-
-        for model in model_files:
+    with SlashR(False) as sr:
+        for i, model in enumerate(model_files, 1):
+            percent = i / len(model_files) * 100
+            sr.print(f"[{percent:.2f}] Processing models {i} / {len(model_files)}: {file.name}")
             model_dir = results_models_dir / model
             model_dir.mkdir(exist_ok=True)
-            shutil.copy(results_pod_decode_dir / f'{model}.json', model_dir / 'model.json')
-            with open(model_dir / 'animations.json', 'w') as f:
-                json.dump(model_animations.get(model, []), f)
+            result_path = model_dir / 'model.json'
+            if not result_path.exists() or FULL_EXPORT:
+                shutil.copy(results_pod_decode_dir / f'{model}.json', result_path)
+                with open(model_dir / 'animations.json', 'w') as f:
+                    json.dump(model_animations.get(model, []), f)
 
 
 def copy_textures_to_combined():
@@ -197,6 +207,7 @@ def copy_textures_to_combined():
                 if output_path.exists():
                     output_path.unlink()
                 raise
+
 
 def compile_models():
     items = list(results_models_dir.glob("*"))
@@ -217,14 +228,18 @@ def compile_models():
 if __name__ == "__main__":
     print("Swordigo Resource Exporter")
     print_file_types()
-    copy_audio_files()
-    export_pvr_textures()
-    copy_textures_to_combined()
-    copy_pod_files()
-    decode_pod_files()
-    sort_model_animations()
+    # copy_audio_files()
+    # export_pvr_textures()
+    # copy_textures_to_combined()
+    # copy_pod_files()
+    # decode_pod_files()
+    # sort_model_animations()
+
+    TEST = 'grove_house1'
+    output_path = results_pod_decode_dir / f'{TEST}.json'
+    model_path = results_models_dir / TEST
+    model_path.mkdir(exist_ok=True)
+    read_pod(resource_dir / f'{TEST}.pod', output_path)
+    shutil.copy(output_path, model_path / 'model.json')
+
     compile_models()
-    # TEST = 'bat_fly'
-    # output_path = results_pod_decode_dir / TEST
-    # output_path.mkdir(exist_ok=True)
-    # read_pod(resource_dir / f'{TEST}.pod', output_path)

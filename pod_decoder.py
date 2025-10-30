@@ -140,7 +140,7 @@ BLOCK_NAMES = {
 
 TAG_START = b'\x00\x00'
 TAG_END = b'\x00\x80'
-DEBUG = False
+DEBUG = True
 
 
 def read_rgb(data) -> tuple[float, float, float]:
@@ -297,14 +297,17 @@ def handle_data(block_type: int, data: bytes, config: dict, info: dict):
         config['textures'].append(str(data[:-1], 'utf-8').strip())
     # NODE BLOCKS
     elif block_type == 5000:  # Node Index
-        index = str(read_s32bit_int(data))
-        if index == '-1' and index in config['nodes']:
-            info['unindexed_node'] += 1
-            index = str(info['unindexed_node'])
+        index_number = read_s32bit_int(data)
+        index = str(index_number)
+
+        if index_number == -1 and index in config['nodes']:
+            info['highest_node_index'] += 1
+            index = str(info['highest_node_index'])
             config['nodes'][index] = {'type': 'unindexed'}
             info['last_node_index'] = index
             return
-        elif index == '-1':
+        elif index_number == -1:
+            info['highest_node_index'] += 1
             config['nodes'][index] = {'type': 'parent'}
             info['last_node_index'] = index
             return
@@ -312,10 +315,13 @@ def handle_data(block_type: int, data: bytes, config: dict, info: dict):
             i = 1
             while (dup_node_index := f'{index}_dup{i}') in config['nodes']:
                 i += 1
-            config['nodes'][dup_node_index] = deepcopy(existing_node)
+            node = deepcopy(existing_node)
+            node['duplication_parent'] = index
+            config['nodes'][dup_node_index] = node
             info['last_node_index'] = dup_node_index
             return
         else:
+            info['highest_node_index'] = max(info['highest_node_index'], index_number)
             info['last_node_index'] = index
         if len(info['node_temp']) < 1:
             config['nodes'][index] = {'type': 'missing node data'}
@@ -465,18 +471,32 @@ def read_pod(input_file: Path, output_path: Path):
         'interleaved_data': None,
         'temp_datas': [],
         'last_node_index': '-1',
-        'unindexed_node' : 999
+        'highest_node_index': -1
     }
 
     try:
         ### Read pod data blocks to a dict
         read_pod_data(input_file, config, info)
 
+        ### Reindex any duplicated nodes
+        nodes = []
+        for node_id, node in config['nodes'].items():
+            if 'dup' in node_id:
+                nodes.append((node_id, node))
+        for node_id, node in nodes:
+            info['highest_node_index'] += 1
+            del config['nodes'][node_id]
+            config['nodes'][info['highest_node_index']] = node
+        del nodes
+
         ### Add any unindexed nodes
-        i = 0
         while len(info['node_temp']) > 0:
-            config['nodes'][f'_{i}'] = info['node_temp'].pop(0)
-            i += 1
+            node = info['node_temp'].pop(0)
+            if not node:
+                continue
+            info['highest_node_index'] += 1
+            node['unindexed'] = True
+            config['nodes'][info['highest_node_index']] = node
 
         ### copy mesh data by checking vertex counts
         # there is probably a better way to this, but considering mesh data is unordered and messy
