@@ -32,6 +32,54 @@ def safe_quat(q):
     return q / n
 
 
+def find_common_ancestor(nodes: List[Node], joint_indices: List[int]) -> Optional[int]:
+    """
+    Find the common ancestor of all joint nodes.
+    Returns the node index that is a common ancestor of all joints,
+    or None if no common ancestor exists.
+    """
+    if not joint_indices:
+        return None
+
+    if len(joint_indices) == 1:
+        # Single joint: use the joint itself as skeleton root
+        # (it's technically its own common ancestor)
+        return joint_indices[0]
+
+    # Build parent map: node_index -> parent_index
+    parent_map = {}
+    for i, node in enumerate(nodes):
+        if node.children:
+            for child_idx in node.children:
+                parent_map[child_idx] = i
+
+    # For each joint, build the path to root
+    def get_path_to_root(node_idx):
+        path = [node_idx]
+        current = node_idx
+        while current in parent_map:
+            current = parent_map[current]
+            path.append(current)
+        return path
+
+    # Get paths for all joints
+    paths = [get_path_to_root(j) for j in joint_indices]
+
+    # Reverse paths so they go from root to joint for easier comparison
+    reversed_paths = [list(reversed(p)) for p in paths]
+
+    # Find the deepest common node
+    common_ancestor = None
+    for depth in range(min(len(p) for p in reversed_paths)):
+        candidates = [p[depth] for p in reversed_paths]
+        if all(c == candidates[0] for c in candidates):
+            common_ancestor = candidates[0]
+        else:
+            break
+
+    return common_ancestor
+
+
 def figure_out_transforms(n, node):
     pos = np.array(node.get('animation_position', [0, 0, 0])[:3], dtype=float)
     anim_q = safe_quat(node.get('animation_rotation', [0, 0, 0, 1])[:4])
@@ -155,24 +203,12 @@ def create_mesh(data: dict, material_index: int):
     uvs_flat = array.array('f', [c for uv in uvs for c in uv]).tobytes()
 
     # optional bone data
-    joints_flat = b""
-    weights_flat = b""
+    # Note: Skinning data (joints/weights) is NOT included in the mesh buffer here.
+    # It will be properly structured and added later in the skinning processing loop.
+    # We only set has_skin flag to track that this mesh needs skinning.
     has_skin = False
     if data.get("bone_indices") and data.get("bone_weights"):
-        bone_indices = data["bone_indices"]
-        bone_weights = data["bone_weights"]
         has_skin = True
-
-        # flatten weird tuple/list structures safely
-        flat_indices = list(itertools.chain.from_iterable(
-            (v if isinstance(v, (list, tuple)) else [v]) for v in bone_indices
-        ))
-        flat_weights = list(itertools.chain.from_iterable(
-            (v if isinstance(v, (list, tuple)) else [v]) for v in bone_weights
-        ))
-
-        joints_flat = align4(array.array('H', flat_indices).tobytes())
-        weights_flat = align4(array.array('f', flat_weights).tobytes())
 
     # Indices
     indices_bytes = b""
@@ -193,11 +229,6 @@ def create_mesh(data: dict, material_index: int):
     positions_bytes = align4(vertices_flat)
     normals_bytes = align4(normals_flat)
     uvs_bytes = align4(uvs_flat)
-    if has_skin:
-        joints_bytes = align4(joints_flat)
-        weights_bytes = align4(weights_flat)
-    else:
-        joints_bytes = weights_bytes = b""
 
     # bufferViews
     buffer_views = []
@@ -208,9 +239,6 @@ def create_mesh(data: dict, material_index: int):
     buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(positions_bytes), target=34962)); offset += len(positions_bytes)
     buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(normals_bytes), target=34962)); offset += len(normals_bytes)
     buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(uvs_bytes), target=34962)); offset += len(uvs_bytes)
-    if has_skin:
-        buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(joints_bytes), target=34962)); offset += len(joints_bytes)
-        buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(weights_bytes), target=34962)); offset += len(weights_bytes)
 
     # compute mins/maxs
     pos_min = [min(p[i] for p in vertices) for i in range(3)]
@@ -231,12 +259,10 @@ def create_mesh(data: dict, material_index: int):
         pos_bv_index = 1
         norm_bv_index = 2
         uv_bv_index = 3
-        skin_offset = 4
     else:
         pos_bv_index = 0
         norm_bv_index = 1
         uv_bv_index = 2
-        skin_offset = 3
 
     accessors.append(Accessor(bufferView=pos_bv_index, byteOffset=0, componentType=5126, count=len(vertices), type="VEC3", min=pos_min, max=pos_max))
     accessor_index_map["POSITION"] = len(accessors) - 1
@@ -247,16 +273,12 @@ def create_mesh(data: dict, material_index: int):
     accessors.append(Accessor(bufferView=uv_bv_index, byteOffset=0, componentType=5126, count=len(uvs), type="VEC2", min=uv_min, max=uv_max))
     accessor_index_map["TEXCOORD_0"] = len(accessors) - 1
 
-    if has_skin:
-        num_vertices = len(vertices)
-        acc_joints = Accessor(bufferView=skin_offset, byteOffset=0, componentType=5123, count=num_vertices, type="SCALAR")
-        acc_weights = Accessor(bufferView=skin_offset + 1, byteOffset=0, componentType=5126, count=num_vertices, type="SCALAR")
-        accessors.extend([acc_joints, acc_weights])
-        accessor_index_map["JOINTS_0"] = len(accessors) - 2
-        accessor_index_map["WEIGHTS_0"] = len(accessors) - 1
+    # Note: Skinning accessors (JOINTS_0, WEIGHTS_0) are NOT created here.
+    # They will be properly created later in the skinning processing loop with VEC4 type.
+    # We just mark that this mesh has skin data.
 
-    # concatenate
-    buffer_bytes = b"".join(filter(None, [indices_bytes, positions_bytes, normals_bytes, uvs_bytes, joints_bytes, weights_bytes]))
+    # concatenate (no joints/weights bytes here)
+    buffer_bytes = b"".join(filter(None, [indices_bytes, positions_bytes, normals_bytes, uvs_bytes]))
 
     prim_attrs = {k: v for k, v in accessor_index_map.items() if k not in ("INDICES",)}
     prim = Primitive(attributes=prim_attrs, indices=accessor_index_map.get("INDICES"), material=material_index)
@@ -267,6 +289,7 @@ def create_mesh(data: dict, material_index: int):
         "buffer_bytes": buffer_bytes,
         "buffer_views": buffer_views,
         "accessors": accessors,
+        "has_skin": has_skin,
     }
 
 
@@ -490,9 +513,11 @@ def compile_glb(model_info: Path, glb_path: Path):
             bv_joints_index = len(gltf.bufferViews) - 2
             bv_weights_index = len(gltf.bufferViews) - 1
 
-            num_vertices = len(data.get("vertices", []))
-            acc_joints = Accessor(bufferView=bv_joints_index, componentType=5123, count=num_vertices, type="VEC4")
-            acc_weights = Accessor(bufferView=bv_weights_index, componentType=5126, count=num_vertices, type="VEC4")
+            # Use actual vertex count from the joints array, not from data['vertices']
+            # as they may differ in malformed data
+            num_skin_vertices = joints_arr.shape[0]
+            acc_joints = Accessor(bufferView=bv_joints_index, componentType=5123, count=num_skin_vertices, type="VEC4")
+            acc_weights = Accessor(bufferView=bv_weights_index, componentType=5126, count=num_skin_vertices, type="VEC4")
 
             gltf.accessors.extend([acc_joints, acc_weights])
             acc_joints_index = len(gltf.accessors) - 2
@@ -501,7 +526,15 @@ def compile_glb(model_info: Path, glb_path: Path):
             prim.attributes["JOINTS_0"] = acc_joints_index
             prim.attributes["WEIGHTS_0"] = acc_weights_index
 
-            skin = Skin(joints=joints, skeleton=joints[0])
+            # Find common ancestor of all joints for skeleton
+            skeleton_node = find_common_ancestor(gltf.nodes, joints)
+            if skeleton_node is None:
+                # No common ancestor found in the node hierarchy.
+                # This can happen if joints are not in a parent-child relationship.
+                # Use the first joint as a fallback (it's at least part of the skeleton).
+                skeleton_node = joints[0] if joints else 0
+
+            skin = Skin(joints=joints, skeleton=skeleton_node)
             skins.append(skin)
             mesh_to_skin_index[mesh_index] = len(skins) - 1
 
