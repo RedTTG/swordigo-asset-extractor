@@ -467,6 +467,13 @@ def compile_glb(model_info: Path, glb_path: Path):
         mesh = gltf.meshes[mesh_index]
         prim = mesh.primitives[0]
 
+        # Get the actual vertex count from the POSITION accessor in the primitive
+        # This is the authoritative count that JOINTS_0 and WEIGHTS_0 must match
+        position_accessor_idx = prim.attributes.get("POSITION")
+        if position_accessor_idx is None:
+            continue
+        expected_vertex_count = gltf.accessors[position_accessor_idx].count
+
         # presence test per your request
         if data.get('bone_indices') is not None and data.get('bone_weights') is not None:
             raw_joints = np.array(data['bone_indices'])
@@ -495,27 +502,48 @@ def compile_glb(model_info: Path, glb_path: Path):
             if joints_arr.shape[0] != weights_arr.shape[0]:
                 continue
 
+            # Ensure bone data has same count as vertices (POSITION accessor count)
+            # Pad or truncate to match the expected vertex count
+            if joints_arr.shape[0] < expected_vertex_count:
+                # Pad with zeros (no joint influence)
+                pad_rows = expected_vertex_count - joints_arr.shape[0]
+                joints_arr = np.pad(joints_arr, ((0, pad_rows), (0, 0)), constant_values=0)
+                weights_arr = np.pad(weights_arr, ((0, pad_rows), (0, 0)), constant_values=0)
+            elif joints_arr.shape[0] > expected_vertex_count:
+                # Truncate to match vertex count
+                joints_arr = joints_arr[:expected_vertex_count]
+                weights_arr = weights_arr[:expected_vertex_count]
+
             # ensure weights per-vertex sum to ~1 (optional, but safer)
             s = weights_arr.sum(axis=1, keepdims=True)
             s[s == 0] = 1.0
             weights_arr = weights_arr / s
 
-            joints_bytes = align4(joints_arr.tobytes())
-            weights_bytes = align4(weights_arr.tobytes())
+            # Convert to bytes - no padding needed as these are already 4-byte aligned
+            joints_bytes_raw = joints_arr.tobytes()
+            weights_bytes_raw = weights_arr.tobytes()
+            
+            # Calculate actual data lengths (without extra padding)
+            joints_byte_length = len(joints_bytes_raw)
+            weights_byte_length = len(weights_bytes_raw)
+            
+            # Pad the raw bytes for buffer alignment
+            joints_bytes = align4(joints_bytes_raw)
+            weights_bytes = align4(weights_bytes_raw)
 
             base_offset = len(all_buffer_bytes)
             all_buffer_bytes += joints_bytes + weights_bytes
 
-            bv_joints = BufferView(buffer=0, byteOffset=base_offset, byteLength=len(joints_bytes), target=34962)
-            bv_weights = BufferView(buffer=0, byteOffset=base_offset + len(joints_bytes), byteLength=len(weights_bytes),
+            # BufferView byteLength should be the actual data size, not including final padding
+            bv_joints = BufferView(buffer=0, byteOffset=base_offset, byteLength=joints_byte_length, target=34962)
+            bv_weights = BufferView(buffer=0, byteOffset=base_offset + len(joints_bytes), byteLength=weights_byte_length,
                                     target=34962)
             gltf.bufferViews.extend([bv_joints, bv_weights])
             bv_joints_index = len(gltf.bufferViews) - 2
             bv_weights_index = len(gltf.bufferViews) - 1
 
-            # Use actual vertex count from the joints array, not from data['vertices']
-            # as they may differ in malformed data
-            num_skin_vertices = joints_arr.shape[0]
+            # Use the expected vertex count to ensure accessors match POSITION
+            num_skin_vertices = expected_vertex_count
             acc_joints = Accessor(bufferView=bv_joints_index, componentType=5123, count=num_skin_vertices, type="VEC4")
             acc_weights = Accessor(bufferView=bv_weights_index, componentType=5126, count=num_skin_vertices, type="VEC4")
 
