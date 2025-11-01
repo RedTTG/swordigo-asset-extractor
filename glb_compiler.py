@@ -1,4 +1,5 @@
 import array
+import itertools
 import json
 import math
 from functools import partial
@@ -6,7 +7,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 
 from pygltflib import Material, PbrMetallicRoughness, TextureInfo, Mesh, Primitive, Accessor, BufferView, GLTF2, Buffer, \
-    Node, Scene, Sampler, Image, Texture
+    Node, Scene, Sampler, Image, Texture, Skin
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
@@ -148,126 +149,117 @@ def create_mesh(data: dict, material_index: int):
 
     uvs = flip_uvs(uvs)
 
-    # Flatten arrays to binary (float32 for vertex data)
+    # Flatten core arrays
     vertices_flat = array.array('f', [c for v in vertices for c in v]).tobytes()
     normals_flat = array.array('f', [c for n in normals for c in n]).tobytes()
     uvs_flat = array.array('f', [c for uv in uvs for c in uv]).tobytes()
 
+    # optional bone data
+    joints_flat = b""
+    weights_flat = b""
+    has_skin = False
+    if data.get("bone_indices") and data.get("bone_weights"):
+        bone_indices = data["bone_indices"]
+        bone_weights = data["bone_weights"]
+        has_skin = True
+
+        # flatten weird tuple/list structures safely
+        flat_indices = list(itertools.chain.from_iterable(
+            (v if isinstance(v, (list, tuple)) else [v]) for v in bone_indices
+        ))
+        flat_weights = list(itertools.chain.from_iterable(
+            (v if isinstance(v, (list, tuple)) else [v]) for v in bone_weights
+        ))
+
+        joints_flat = align4(array.array('H', flat_indices).tobytes())
+        weights_flat = align4(array.array('f', flat_weights).tobytes())
+
+    # Indices
     indices_bytes = b""
     index_type_code = None
-
-    # If indices is provided (not null), build index bytes and choose component type
     if indices is not None:
-        # allow empty list -> create empty index accessor
         if len(indices) > 0:
             max_index = max(indices)
             if max_index < 65536:
-                index_type_code = 5123  # UNSIGNED_SHORT
+                index_type_code = 5123
                 idx_array = array.array('H', indices)
             else:
-                index_type_code = 5125  # UNSIGNED_INT
+                index_type_code = 5125
                 idx_array = array.array('I', indices)
             indices_bytes = align4(idx_array.tobytes())
         else:
-            # empty index buffer -> zero-length, still aligned
             indices_bytes = align4(b"")
 
     positions_bytes = align4(vertices_flat)
     normals_bytes = align4(normals_flat)
     uvs_bytes = align4(uvs_flat)
+    if has_skin:
+        joints_bytes = align4(joints_flat)
+        weights_bytes = align4(weights_flat)
+    else:
+        joints_bytes = weights_bytes = b""
 
-    # Build bufferViews in order; if indices present they come first
+    # bufferViews
     buffer_views = []
     offset = 0
-
     if indices is not None:
         buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(indices_bytes), target=34963))
         offset += len(indices_bytes)
+    buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(positions_bytes), target=34962)); offset += len(positions_bytes)
+    buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(normals_bytes), target=34962)); offset += len(normals_bytes)
+    buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(uvs_bytes), target=34962)); offset += len(uvs_bytes)
+    if has_skin:
+        buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(joints_bytes), target=34962)); offset += len(joints_bytes)
+        buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(weights_bytes), target=34962)); offset += len(weights_bytes)
 
-    buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(positions_bytes), target=34962))
-    offset += len(positions_bytes)
-
-    buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(normals_bytes), target=34962))
-    offset += len(normals_bytes)
-
-    buffer_views.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(uvs_bytes), target=34962))
-    offset += len(uvs_bytes)
-
-    # Compute min/max for positions and uvs
+    # compute mins/maxs
     pos_min = [min(p[i] for p in vertices) for i in range(3)]
     pos_max = [max(p[i] for p in vertices) for i in range(3)]
     uv_min = [min(uv[i] for uv in uvs) for i in range(2)]
     uv_max = [max(uv[i] for uv in uvs) for i in range(2)]
 
+    # accessors
     accessors = []
-    accessor_index_map = {}  # map semantic -> local accessor index
+    accessor_index_map = {}
 
-    # If indices present, add indices accessor first
     if indices is not None:
-        count_indices = len(indices) if indices else 0
-        if count_indices == 0:
-            acc = Accessor(bufferView=0, byteOffset=0, componentType=index_type_code or 5123, count=0,
-                           type="SCALAR")
-        else:
-            acc = Accessor(
-                bufferView=0,
-                byteOffset=0,
-                componentType=index_type_code,
-                count=count_indices,
-                type="SCALAR",
-                min=[min(indices)],
-                max=[max(indices)],
-            )
+        count_indices = len(indices)
+        acc = Accessor(bufferView=0, byteOffset=0, componentType=index_type_code, count=count_indices, type="SCALAR",
+                       min=[min(indices)], max=[max(indices)])
         accessors.append(acc)
         accessor_index_map["INDICES"] = 0
         pos_bv_index = 1
         norm_bv_index = 2
         uv_bv_index = 3
+        skin_offset = 4
     else:
-        # no indices -> positions start at bufferView 0
         pos_bv_index = 0
         norm_bv_index = 1
         uv_bv_index = 2
+        skin_offset = 3
 
-    # Positions accessor
-    accessors.append(
-        Accessor(bufferView=pos_bv_index, byteOffset=0, componentType=5126, count=len(vertices), type="VEC3",
-                 min=pos_min, max=pos_max)
-    )
+    accessors.append(Accessor(bufferView=pos_bv_index, byteOffset=0, componentType=5126, count=len(vertices), type="VEC3", min=pos_min, max=pos_max))
     accessor_index_map["POSITION"] = len(accessors) - 1
 
-    # Normals accessor
-    accessors.append(
-        Accessor(bufferView=norm_bv_index, byteOffset=0, componentType=5126, count=len(normals), type="VEC3")
-    )
+    accessors.append(Accessor(bufferView=norm_bv_index, byteOffset=0, componentType=5126, count=len(normals), type="VEC3"))
     accessor_index_map["NORMAL"] = len(accessors) - 1
 
-    # UVs accessor
-    accessors.append(
-        Accessor(bufferView=uv_bv_index, byteOffset=0, componentType=5126, count=len(uvs), type="VEC2", min=uv_min,
-                 max=uv_max)
-    )
+    accessors.append(Accessor(bufferView=uv_bv_index, byteOffset=0, componentType=5126, count=len(uvs), type="VEC2", min=uv_min, max=uv_max))
     accessor_index_map["TEXCOORD_0"] = len(accessors) - 1
 
-    # Concatenate final buffer bytes in same order as bufferViews
-    if indices is not None:
-        buffer_bytes = indices_bytes + positions_bytes + normals_bytes + uvs_bytes
-    else:
-        buffer_bytes = positions_bytes + normals_bytes + uvs_bytes
+    if has_skin:
+        num_vertices = len(vertices)
+        acc_joints = Accessor(bufferView=skin_offset, byteOffset=0, componentType=5123, count=num_vertices, type="SCALAR")
+        acc_weights = Accessor(bufferView=skin_offset + 1, byteOffset=0, componentType=5126, count=num_vertices, type="SCALAR")
+        accessors.extend([acc_joints, acc_weights])
+        accessor_index_map["JOINTS_0"] = len(accessors) - 2
+        accessor_index_map["WEIGHTS_0"] = len(accessors) - 1
 
-    # Build a mesh with a single primitive referencing these accessors
-    # Set primitive.indices to None when indices were omitted
-    if indices is not None:
-        local_index_for_indices = accessor_index_map.get("INDICES", None)
-    else:
-        local_index_for_indices = None
+    # concatenate
+    buffer_bytes = b"".join(filter(None, [indices_bytes, positions_bytes, normals_bytes, uvs_bytes, joints_bytes, weights_bytes]))
 
-    prim_attrs = {
-        "POSITION": accessor_index_map["POSITION"],
-        "NORMAL": accessor_index_map["NORMAL"],
-        "TEXCOORD_0": accessor_index_map["TEXCOORD_0"],
-    }
-    prim = Primitive(attributes=prim_attrs, indices=local_index_for_indices, material=material_index)
+    prim_attrs = {k: v for k, v in accessor_index_map.items() if k not in ("INDICES",)}
+    prim = Primitive(attributes=prim_attrs, indices=accessor_index_map.get("INDICES"), material=material_index)
     mesh = Mesh(primitives=[prim], name=data.get("name", ""))
 
     return {
@@ -302,9 +294,6 @@ def compile_glb(model_info: Path, glb_path: Path):
         if not vertices:
             continue
         del vertices
-        if 'grove_house1' in str(model_info):
-            print(node.get('name', node_id), node.get('material_index', 0))
-            print(materials)
         mesh_chunks.append(create_mesh(data, node.get('material_index', 0)))
         vertices_count_to_mesh_index[count_vertices] = len(mesh_chunks) - 1
 
@@ -426,7 +415,101 @@ def compile_glb(model_info: Path, glb_path: Path):
     gltf.scenes = [Scene(nodes=root_nodes)]
     gltf.scene = 0
 
+    skins = []
+    mesh_to_skin_index = {}
 
+    for node_id, node in config['nodes'].items():
+        data = node.get('data')
+        if not data:
+            continue
+        bone_batch = node.get('bone_batch_indexes', [])
+        # your preferred presence test
+        if not bone_batch or node.get('num_of_bones_per_batch', 0) == 0:
+            continue
+
+        joints = []
+        for idx in bone_batch[: node.get('num_of_bones_per_batch', [0])[0]]:
+            if idx == 0:
+                continue
+            j = nid_to_index.get(idx)
+            if j is not None:
+                joints.append(j)
+        if not joints:
+            continue
+
+        mesh_index = vertices_count_to_mesh_index.get(len(data.get('vertices', [])))
+        if mesh_index is None:
+            continue
+
+        mesh = gltf.meshes[mesh_index]
+        prim = mesh.primitives[0]
+
+        # presence test per your request
+        if data.get('bone_indices') is not None and data.get('bone_weights') is not None:
+            raw_joints = np.array(data['bone_indices'])
+            raw_weights = np.array(data['bone_weights'], dtype=np.float32)
+
+            # Normalize shapes: support flat list or already grouped lists
+            def ensure_grouped(arr, dtype, group=4):
+                arr = np.array(arr, dtype=dtype)
+                if arr.ndim == 1:
+                    rem = arr.size % group
+                    if rem != 0:
+                        pad = group - rem
+                        arr = np.pad(arr, (0, pad), constant_values=0)
+                    arr = arr.reshape((-1, group))
+                elif arr.ndim == 2 and arr.shape[1] != group:
+                    # pad inner dimension
+                    pad_cols = group - arr.shape[1] if arr.shape[1] < group else 0
+                    if pad_cols:
+                        arr = np.pad(arr, ((0, 0), (0, pad_cols)), constant_values=0)
+                return arr
+
+            joints_arr = ensure_grouped(raw_joints, dtype=np.uint16, group=4)
+            weights_arr = ensure_grouped(raw_weights, dtype=np.float32, group=4)
+
+            # if counts don't match, skip (malformed)
+            if joints_arr.shape[0] != weights_arr.shape[0]:
+                continue
+
+            # ensure weights per-vertex sum to ~1 (optional, but safer)
+            s = weights_arr.sum(axis=1, keepdims=True)
+            s[s == 0] = 1.0
+            weights_arr = weights_arr / s
+
+            joints_bytes = align4(joints_arr.tobytes())
+            weights_bytes = align4(weights_arr.tobytes())
+
+            base_offset = len(all_buffer_bytes)
+            all_buffer_bytes += joints_bytes + weights_bytes
+
+            bv_joints = BufferView(buffer=0, byteOffset=base_offset, byteLength=len(joints_bytes), target=34962)
+            bv_weights = BufferView(buffer=0, byteOffset=base_offset + len(joints_bytes), byteLength=len(weights_bytes),
+                                    target=34962)
+            gltf.bufferViews.extend([bv_joints, bv_weights])
+            bv_joints_index = len(gltf.bufferViews) - 2
+            bv_weights_index = len(gltf.bufferViews) - 1
+
+            num_vertices = len(data.get("vertices", []))
+            acc_joints = Accessor(bufferView=bv_joints_index, componentType=5123, count=num_vertices, type="VEC4")
+            acc_weights = Accessor(bufferView=bv_weights_index, componentType=5126, count=num_vertices, type="VEC4")
+
+            gltf.accessors.extend([acc_joints, acc_weights])
+            acc_joints_index = len(gltf.accessors) - 2
+            acc_weights_index = len(gltf.accessors) - 1
+
+            prim.attributes["JOINTS_0"] = acc_joints_index
+            prim.attributes["WEIGHTS_0"] = acc_weights_index
+
+            skin = Skin(joints=joints, skeleton=joints[0])
+            skins.append(skin)
+            mesh_to_skin_index[mesh_index] = len(skins) - 1
+
+    for n in gltf.nodes:
+        if n.mesh is not None and n.mesh in mesh_to_skin_index:
+            n.skin = mesh_to_skin_index[n.mesh]
+
+    gltf.skins = skins
 
     # Attach binary blob and write GLB
     gltf.set_binary_blob(all_buffer_bytes)
