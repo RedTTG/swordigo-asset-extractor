@@ -42,7 +42,8 @@ def find_common_ancestor(nodes: List[Node], joint_indices: List[int]) -> Optiona
         return None
 
     if len(joint_indices) == 1:
-        # Single joint: the joint itself is the skeleton root
+        # Single joint: use the joint itself as skeleton root
+        # (it's technically its own common ancestor)
         return joint_indices[0]
 
     # Build parent map: node_index -> parent_index
@@ -64,9 +65,7 @@ def find_common_ancestor(nodes: List[Node], joint_indices: List[int]) -> Optiona
     # Get paths for all joints
     paths = [get_path_to_root(j) for j in joint_indices]
 
-    # Find common ancestor by checking from root down
-    # The longest path gives us the maximum depth
-    # Reverse paths so they go from root to joint
+    # Reverse paths so they go from root to joint for easier comparison
     reversed_paths = [list(reversed(p)) for p in paths]
 
     # Find the deepest common node
@@ -530,7 +529,9 @@ def compile_glb(model_info: Path, glb_path: Path):
             # Find common ancestor of all joints for skeleton
             skeleton_node = find_common_ancestor(gltf.nodes, joints)
             if skeleton_node is None:
-                # Fallback to first joint if no common ancestor found
+                # No common ancestor found in the node hierarchy.
+                # This can happen if joints are not in a parent-child relationship.
+                # Use the first joint as a fallback (it's at least part of the skeleton).
                 skeleton_node = joints[0] if joints else 0
 
             skin = Skin(joints=joints, skeleton=skeleton_node)
