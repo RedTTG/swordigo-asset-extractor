@@ -542,7 +542,7 @@ def compile_glb(model_info: Path, glb_path: Path):
             s[s == 0] = 1.0
             weights_arr = weights_arr / s
 
-            # Convert to bytes - no padding needed as these are already 4-byte aligned
+            # Convert to bytes
             joints_bytes_raw = joints_arr.tobytes()
             weights_bytes_raw = weights_arr.tobytes()
             
@@ -591,7 +591,7 @@ def compile_glb(model_info: Path, glb_path: Path):
             else:
                 # No common ancestor found by the algorithm
                 # Try using the first scene root node if it's an ancestor of all joints
-                if root_nodes and len(root_nodes) > 0:
+                if root_nodes:
                     candidate_root = root_nodes[0]
                     if all(is_ancestor_of(gltf.nodes, candidate_root, j) for j in joints):
                         skin = Skin(joints=joints, skeleton=candidate_root)
