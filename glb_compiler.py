@@ -32,6 +32,29 @@ def safe_quat(q):
     return q / n
 
 
+def is_ancestor_of(nodes: List[Node], ancestor_idx: int, descendant_idx: int) -> bool:
+    """
+    Check if ancestor_idx is an ancestor of (or equal to) descendant_idx in the node hierarchy.
+    """
+    if ancestor_idx == descendant_idx:
+        return True
+    
+    # Build parent map
+    parent_map = {}
+    for i, node in enumerate(nodes):
+        if node.children:
+            for child_idx in node.children:
+                parent_map[child_idx] = i
+    
+    # Trace from descendant to root
+    current = descendant_idx
+    while current in parent_map:
+        current = parent_map[current]
+        if current == ancestor_idx:
+            return True
+    return False
+
+
 def find_common_ancestor(nodes: List[Node], joint_indices: List[int]) -> Optional[int]:
     """
     Find the common ancestor of all joint nodes.
@@ -556,13 +579,28 @@ def compile_glb(model_info: Path, glb_path: Path):
 
             # Find common ancestor of all joints for skeleton
             skeleton_node = find_common_ancestor(gltf.nodes, joints)
-            if skeleton_node is None:
-                # No common ancestor found in the node hierarchy.
-                # This can happen if joints are not in a parent-child relationship.
-                # Use the first joint as a fallback (it's at least part of the skeleton).
-                skeleton_node = joints[0] if joints else 0
-
-            skin = Skin(joints=joints, skeleton=skeleton_node)
+            
+            # Create skin with validated skeleton root
+            if skeleton_node is not None:
+                # Validate that skeleton_node is actually an ancestor of all joints
+                if all(is_ancestor_of(gltf.nodes, skeleton_node, j) for j in joints):
+                    skin = Skin(joints=joints, skeleton=skeleton_node)
+                else:
+                    # Invalid skeleton found, omit it
+                    skin = Skin(joints=joints)
+            else:
+                # No common ancestor found by the algorithm
+                # Try using the first scene root node if it's an ancestor of all joints
+                if root_nodes and len(root_nodes) > 0:
+                    candidate_root = root_nodes[0]
+                    if all(is_ancestor_of(gltf.nodes, candidate_root, j) for j in joints):
+                        skin = Skin(joints=joints, skeleton=candidate_root)
+                    else:
+                        # No valid skeleton root found, omit the skeleton property
+                        skin = Skin(joints=joints)
+                else:
+                    # No root nodes available, omit skeleton
+                    skin = Skin(joints=joints)
             skins.append(skin)
             mesh_to_skin_index[mesh_index] = len(skins) - 1
 
