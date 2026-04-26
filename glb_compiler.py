@@ -458,10 +458,31 @@ def compile_glb(model_info: Path, glb_path: Path):
         if bone_batch and num_bones > 0:
             nodes_with_skins.add(node_id)
 
+    # Find bones that are referenced but not in config - create them FIRST so they get correct indices
+    referenced_bones = set()
+    for node in config["nodes"].values():
+        bones = node.get("bone_batch_indexes", [])
+        num = node.get("num_of_bones_per_batch", [0])
+        num_count = num[0] if isinstance(num, list) else num
+        for b in bones[:num_count]:
+            if b != 0:
+                referenced_bones.add(b)
+
     # Build nodes list preserving input order; support parent references.
     nodes: List[Node] = []
     nid_to_index = {}  # numeric node id -> index in nodes list
     node_parent_nid = {}  # numeric node id -> parent numeric id (or -1)
+
+    # Create missing bone nodes FIRST so they get correct indices (before other nodes)
+    for bone_nid in sorted(referenced_bones):
+        if str(bone_nid) not in config["nodes"]:
+            n = Node(name=f"BoneBody{bone_nid}")
+            n.translation = [0.0, 0.0, 0.0]
+            n.rotation = [0.0, 0.0, 0.0, 1.0]
+            n.scale = [1.0, 1.0, 1.0]
+            nodes.append(n)
+            nid_to_index[bone_nid] = len(nodes) - 1
+            node_parent_nid[bone_nid] = -1
 
     for node_id, node in config["nodes"].items():
         nid = int(node_id)
