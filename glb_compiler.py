@@ -48,48 +48,60 @@ def safe_quat(q):
     return q / n
 
 
+def axis_angle_to_quat(axis, angle):
+    axis = np.array(axis, dtype=float)
+    n = np.linalg.norm(axis)
+    if n < 1e-8:
+        return np.array([0, 0, 0, 1])
+    axis /= n
+    half = angle * 0.5
+    s = np.sin(half)
+    return np.array([axis[0] * s, axis[1] * s, axis[2] * s, np.cos(half)])
+
+
 def figure_out_transforms(n, node):
-    # Check if this is a bone node (no mesh data, name starts with 'Bone')
-    node_name = node.get("name", "")
-    is_bone_node = "data" not in node and node_name.startswith("Bone")
+    # unknown_5009 format: [scale_x, scale_y, scale_z, axis_x, axis_y, axis_z, angle]
+    # Values 0-2: scale, Values 3-6: axis-angle rotation
 
-    if is_bone_node:
-        # Use unknown_5009 for bind pose transforms on bones
-        if "unknown_5009" in node:
-            scale = node["unknown_5009"][:3]
-            axis = node["unknown_5009"][3:6]
-            angle = float(node["unknown_5009"][6])
-            bind_q = axis_angle_to_quat(axis, angle)
-            bind_q[2] = -bind_q[2]
-        else:
-            scale = [1, 1, 1]
-            bind_q = [0, 0, 0, 1]
+    is_bone = "data" not in node and node.get("name", "").startswith("Bone")
+
+    # Get unknown_5009 values if present
+    u5009 = node.get("unknown_5009", [1, 1, 1, 0, 0, 0, 0])
+    scale = [float(u5009[0]), float(u5009[1]), float(u5009[2])]
+    axis = [float(u5009[3]), float(u5009[4]), float(u5009[5])]
+    angle = float(u5009[6])
+    bind_rot = axis_angle_to_quat(axis, angle)
+
+    # Get position
+    anim_pos = node.get("animation_position", [0, 0, 0])
+    # POD Y -> glTF Y (vertical), POD Z -> glTF Z (forward) - no change needed
+    pos = [float(anim_pos[0]), float(anim_pos[1]), float(anim_pos[2])]
+
+    if is_bone:
         n.translation = [0.0, 0.0, 0.0]
-        n.rotation = [float(v) for v in bind_q]
-        n.scale = [float(v) for v in scale]
+        n.rotation = [
+            float(bind_rot[0]),
+            float(bind_rot[1]),
+            float(bind_rot[2]),
+            float(bind_rot[3]),
+        ]
+        n.scale = scale
     else:
-        # For mesh nodes: use animation transforms as before
-        pos = np.array(node.get("animation_position", [0, 0, 0])[:3], dtype=float)
-        anim_q = safe_quat(node.get("animation_rotation", [0, 0, 0, 1])[:4])
-
-        if "unknown_5009" in node:
-            scale = node["unknown_5009"][:3]
-            axis = node["unknown_5009"][3:6]
-            angle = float(node["unknown_5009"][6])
-            bind_q = axis_angle_to_quat(axis, angle)
+        anim_rot = node.get("animation_rotation", [0, 0, 0, 1])
+        anim_rot = np.array(anim_rot, dtype=float)
+        if np.linalg.norm(anim_rot) < 1e-8:
+            anim_rot = np.array([0, 0, 0, 1])
         else:
-            scale = [1, 1, 1]
-            bind_q = [0, 0, 0, 1]
+            anim_rot = anim_rot / np.linalg.norm(anim_rot)
 
-        anim_q[2] = -anim_q[2]  # invert Z axis
-        bind_q[2] = -bind_q[2]
-
-        # only combine rotations
-        final_rot = R.from_quat(anim_q) * R.from_quat(bind_q)
-
-        n.translation = pos.tolist()
-        n.rotation = final_rot.as_quat().tolist()
-        n.scale = list(scale)
+        n.translation = pos
+        n.rotation = [
+            float(anim_rot[0]),
+            float(anim_rot[1]),
+            float(anim_rot[2]),
+            float(anim_rot[3]),
+        ]
+        n.scale = scale
 
 
 def create_material(mat_data):
@@ -512,8 +524,15 @@ def compile_glb(model_info: Path, glb_path: Path):
     # Second pass: link children into parents using numeric ids
     # Also track missing parents that need to be created synthetically
     missing_parents = {}
+
+    # Special case: make multiple mesh nodes children of first mesh (Box02 child of Box01)
+    # This keeps ears attached to body
+    first_mesh_nid = None
+    mesh_nids = set()
     for nid, idx in nid_to_index.items():
         parent_nid = node_parent_nid.get(nid, -1)
+
+        # Keep original parent_index from source - don't reparent meshes
         if parent_nid is None or parent_nid == -1:
             continue
         parent_idx = nid_to_index.get(parent_nid)
@@ -574,12 +593,17 @@ def compile_glb(model_info: Path, glb_path: Path):
         return nid_to_index.get(current_nid)
 
     # Helper function to compute inverse bind matrices
-    def compute_inverse_bind_matrices(joint_nids, joint_indices, nodes, nid_to_index):
-        """Compute inverse bind matrices for each joint."""
-        # For now, use identity matrices (safe for bind pose = identity assumption)
+    def compute_inverse_bind_matrices(
+        joint_nids, joint_indices, nodes, nid_to_index, config
+    ):
+        """Compute inverse bind matrices for each joint.
+
+        For pre-posed POD meshes where vertices are already at final position,
+        use identity matrices - bones exist for animation hierarchy only.
+        """
         matrices = []
-        for joint_idx in joint_indices:
-            # Identity matrix as 16 floats [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]
+        for joint_nid in joint_nids:
+            # Identity matrix
             matrices.append([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
         return matrices
 
@@ -712,7 +736,7 @@ def compile_glb(model_info: Path, glb_path: Path):
 
             # Compute inverse bind matrices using valid bones
             inv_bind_matrices = compute_inverse_bind_matrices(
-                valid_bone_node_ids, joints, nodes, nid_to_index
+                valid_bone_node_ids, joints, nodes, nid_to_index, config
             )
 
             # Pack inverse bind matrices into buffer
