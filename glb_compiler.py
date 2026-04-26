@@ -588,6 +588,9 @@ def compile_glb(model_info: Path, glb_path: Path):
         if not joints:
             continue
 
+        # Build lookup: bone_node_index -> position in joints array (for mapping bone_indices)
+        bone_to_joint_position = {joints[i]: i for i in range(len(joints))}
+
         mesh_index = vertices_count_to_mesh_index.get(len(data.get("vertices", [])))
         if mesh_index is None:
             continue
@@ -605,7 +608,13 @@ def compile_glb(model_info: Path, glb_path: Path):
             data.get("bone_indices") is not None
             and data.get("bone_weights") is not None
         ):
-            raw_joints = np.array(data["bone_indices"])
+            # Map bone_indices: POD index -> position in joints array (0, 1, 2, ...)
+            # bone_indices[i] = 1 means: use joint at position 1 (bone 5)
+            mapped_joints = np.array(
+                [bone_to_joint_position.get(idx, 0) for idx in data["bone_indices"]],
+                dtype=np.uint16,
+            )
+            raw_joints = mapped_joints
             raw_weights = np.array(data["bone_weights"], dtype=np.float32)
 
             # Normalize shapes: support flat list or already grouped lists
