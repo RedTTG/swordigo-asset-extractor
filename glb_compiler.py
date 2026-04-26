@@ -443,21 +443,6 @@ def compile_glb(model_info: Path, glb_path: Path):
     gltf.samplers = samplers
     gltf.textures = textures
 
-    # Pre-compute which node_ids will have skins (for transform handling)
-    # These are nodes that have both mesh data and bone data
-    nodes_with_skins = set()
-    for node_id, node in config["nodes"].items():
-        data = node.get("data")
-        if not data:
-            continue
-        bone_batch = node.get("bone_batch_indexes", [])
-        num_bones_list = node.get("num_of_bones_per_batch", [0])
-        num_bones = (
-            num_bones_list[0] if isinstance(num_bones_list, list) else num_bones_list
-        )
-        if bone_batch and num_bones > 0:
-            nodes_with_skins.add(node_id)
-
     # Find bones that are referenced but not in config - create them FIRST so they get correct indices
     referenced_bones = set()
     for node in config["nodes"].values():
@@ -498,16 +483,8 @@ def compile_glb(model_info: Path, glb_path: Path):
             if mesh_index is not None:
                 n.mesh = mesh_index
 
-        # Copy transform fields if present
-        # BUT: For mesh nodes with skinning data, use identity transforms
-        # The mesh vertices are already in the correct space, and skins handle the bone transforms
-        if node_id not in nodes_with_skins:
-            figure_out_transforms(n, node)
-        else:
-            # Mesh node with skinning: use identity transform
-            n.translation = [0.0, 0.0, 0.0]
-            n.rotation = [0.0, 0.0, 0.0, 1.0]
-            n.scale = [1.0, 1.0, 1.0]
+        # Copy transform fields (bind pose transforms from source data)
+        figure_out_transforms(n, node)
 
         nodes.append(n)
         nid_to_index[nid] = len(nodes) - 1
