@@ -1,0 +1,6 @@
+[submodule "swordigo_source_code"]
+	path = swordigo_source_code
+	url = https://github.com/SwordigoPlus/Swordigo-SoureCode
+[submodule "PVRTexToolLib"]
+	path = PVRTexToolLib
+	url = https://github.com/akb825/PVRTexToolLib.git

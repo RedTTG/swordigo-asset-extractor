@@ -11,7 +11,7 @@ from glb_compiler import compile_glb
 from pod_decoder import read_pod
 from pvr_extractor import pvr_to_png
 
-swordigo_dir = Path("C:\\Users\\Red\\Documents\\Swordigo")
+swordigo_dir = Path("swordigo_source_code")
 resource_dir = swordigo_dir / "assets" / "resources"
 
 # Output directories
@@ -228,18 +228,18 @@ def compile_models():
 if __name__ == "__main__":
     print("Swordigo Resource Exporter")
     print_file_types()
-    # copy_audio_files()
-    # export_pvr_textures()
-    # copy_textures_to_combined()
-    # copy_pod_files()
-    # decode_pod_files()
-    # sort_model_animations()
+    copy_audio_files()
+    export_pvr_textures()
+    copy_textures_to_combined()
+    copy_pod_files()
+    decode_pod_files()
+    sort_model_animations()
 
     TEST = 'grove_house1'
     output_path = results_pod_decode_dir / f'{TEST}.json'
     model_path = results_models_dir / TEST
     model_path.mkdir(exist_ok=True)
-    read_pod(resource_dir / f'{TEST}.pod', output_path)
+    read_pod(resource_dir / f'{TEST}.POD', output_path)
     shutil.copy(output_path, model_path / 'model.json')
 
     compile_models()
