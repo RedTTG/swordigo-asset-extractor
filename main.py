@@ -32,7 +32,7 @@ results_animations_dir.mkdir(exist_ok=True)
 results_audio_dir = results_assets_dir / "audio"
 results_audio_dir.mkdir(exist_ok=True)
 
-FULL_EXPORT = True
+FULL_EXPORT = False
 
 
 def print_file_types():
@@ -93,14 +93,14 @@ def copy_pod_files():
                 raise
 
 
-def decode_pod_files():
+def decode_pod_files(redo: bool = False):
     items = list(resource_dir.rglob("*.pod"))
     with SlashR(False) as sr:
         for i, file in enumerate(items, 1):
             percent = i / len(items) * 100
             sr.print(f"[{percent:.2f}] Decoding pod {i} / {len(items)}: {file.name}")
             output_path = results_pod_decode_dir / f'{file.stem}.json'
-            if output_path.exists() and not FULL_EXPORT:
+            if output_path.exists() and not FULL_EXPORT and not redo:
                 continue
             try:
                 read_pod(file, output_path)
@@ -110,7 +110,7 @@ def decode_pod_files():
                 raise
 
 
-def sort_model_animations():
+def sort_model_animations(redo: bool = False):
     items = list(results_pod_decode_dir.rglob("*"))
     model_files = set()
     animation_files = set()
@@ -121,11 +121,11 @@ def sort_model_animations():
     path_animation_files = Path('animation_files.json')
     path_animation_associations = Path('animations_associations.json')
 
-    if path_model_files.exists() and not FULL_EXPORT:
+    if path_model_files.exists() and not FULL_EXPORT and not redo:
         with open(path_model_files, 'r') as f:
             model_files = set(json.load(f))
 
-    if path_animation_files.exists() and not FULL_EXPORT:
+    if path_animation_files.exists() and not FULL_EXPORT and not redo:
         with open(path_animation_files, 'r') as f:
             animation_files = set(json.load(f))
 
@@ -186,7 +186,7 @@ def sort_model_animations():
             model_dir = results_models_dir / model
             model_dir.mkdir(exist_ok=True)
             result_path = model_dir / 'model.json'
-            if not result_path.exists() or FULL_EXPORT:
+            if not result_path.exists() or FULL_EXPORT or redo:
                 shutil.copy(results_pod_decode_dir / f'{model}.json', result_path)
                 with open(model_dir / 'animations.json', 'w') as f:
                     json.dump(model_animations.get(model, []), f)
@@ -232,10 +232,10 @@ if __name__ == "__main__":
     export_pvr_textures()
     copy_textures_to_combined()
     copy_pod_files()
-    decode_pod_files()
-    sort_model_animations()
+    decode_pod_files(redo=True)
+    sort_model_animations(redo=True)
 
-    TEST = 'grove_house1'
+    TEST = 'critter_konna_green'
     output_path = results_pod_decode_dir / f'{TEST}.json'
     model_path = results_models_dir / TEST
     model_path.mkdir(exist_ok=True)
