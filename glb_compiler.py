@@ -49,27 +49,47 @@ def safe_quat(q):
 
 
 def figure_out_transforms(n, node):
-    pos = np.array(node.get("animation_position", [0, 0, 0])[:3], dtype=float)
-    anim_q = safe_quat(node.get("animation_rotation", [0, 0, 0, 1])[:4])
+    # Check if this is a bone node (no mesh data, name starts with 'Bone')
+    node_name = node.get("name", "")
+    is_bone_node = "data" not in node and node_name.startswith("Bone")
 
-    if "unknown_5009" in node:
-        scale = node["unknown_5009"][:3]
-        axis = node["unknown_5009"][3:6]
-        angle = float(node["unknown_5009"][6])
-        bind_q = axis_angle_to_quat(axis, angle)
+    if is_bone_node:
+        # Use unknown_5009 for bind pose transforms on bones
+        if "unknown_5009" in node:
+            scale = node["unknown_5009"][:3]
+            axis = node["unknown_5009"][3:6]
+            angle = float(node["unknown_5009"][6])
+            bind_q = axis_angle_to_quat(axis, angle)
+            bind_q[2] = -bind_q[2]
+        else:
+            scale = [1, 1, 1]
+            bind_q = [0, 0, 0, 1]
+        n.translation = [0.0, 0.0, 0.0]
+        n.rotation = [float(v) for v in bind_q]
+        n.scale = [float(v) for v in scale]
     else:
-        scale = [1, 1, 1]
-        bind_q = [0, 0, 0, 1]
+        # For mesh nodes: use animation transforms as before
+        pos = np.array(node.get("animation_position", [0, 0, 0])[:3], dtype=float)
+        anim_q = safe_quat(node.get("animation_rotation", [0, 0, 0, 1])[:4])
 
-    anim_q[2] = -anim_q[2]  # invert Z axis
-    bind_q[2] = -bind_q[2]
+        if "unknown_5009" in node:
+            scale = node["unknown_5009"][:3]
+            axis = node["unknown_5009"][3:6]
+            angle = float(node["unknown_5009"][6])
+            bind_q = axis_angle_to_quat(axis, angle)
+        else:
+            scale = [1, 1, 1]
+            bind_q = [0, 0, 0, 1]
 
-    # only combine rotations
-    final_rot = R.from_quat(anim_q) * R.from_quat(bind_q)
+        anim_q[2] = -anim_q[2]  # invert Z axis
+        bind_q[2] = -bind_q[2]
 
-    n.translation = pos.tolist()
-    n.rotation = final_rot.as_quat().tolist()
-    n.scale = list(scale)
+        # only combine rotations
+        final_rot = R.from_quat(anim_q) * R.from_quat(bind_q)
+
+        n.translation = pos.tolist()
+        n.rotation = final_rot.as_quat().tolist()
+        n.scale = list(scale)
 
 
 def create_material(mat_data):

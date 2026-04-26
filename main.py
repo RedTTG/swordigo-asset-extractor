@@ -235,7 +235,7 @@ if __name__ == "__main__":
     decode_pod_files(redo=True)
     sort_model_animations(redo=True)
 
-    TEST = 'critter_konna_green'
+    TEST = 'bat'
     output_path = results_pod_decode_dir / f'{TEST}.json'
     model_path = results_models_dir / TEST
     model_path.mkdir(exist_ok=True)
